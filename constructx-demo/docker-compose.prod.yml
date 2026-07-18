@@ -1,0 +1,52 @@
+# Production compose for a Linux VPS (internal / IP access).
+# Differences vs the dev compose:
+#   - No source bind-mounts: code is baked into the image (immutable deploy)
+#   - Database is NOT exposed to the host (stays inside the Docker network)
+#   - Secrets come from .env (never hardcoded)
+#   - restart: unless-stopped so it survives reboots/crashes
+#   - Trained models persist in a volume (no retrain on every restart)
+#
+# Usage:
+#   cp .env.example .env      # then edit .env and set a strong password
+#   docker compose -f docker-compose.prod.yml up -d --build
+#   # open http://YOUR_SERVER_IP:8000
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: constructx_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-constructx}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-constructx}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-constructx} -d ${POSTGRES_DB:-constructx}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # No `ports:` — the database is only reachable by the api container,
+    # never from the public internet.
+
+  api:
+    build: ./backend
+    image: constructx-api:latest
+    container_name: constructx_api
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-constructx}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-constructx}
+      MODELS_DIR: /code/models
+    ports:
+      - "8000:8000"          # exposed so you can reach it at http://SERVER_IP:8000
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - models:/code/models  # persist trained models across restarts
+
+volumes:
+  pgdata:
+  models:
