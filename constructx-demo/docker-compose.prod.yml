@@ -40,7 +40,7 @@ services:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-constructx}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-constructx}
       MODELS_DIR: /code/models
     ports:
-      - "8000:8050"          # exposed so you can reach it at http://SERVER_IP:8000
+      - "8050:8000"          # exposed so you can reach it at http://SERVER_IP:8000
     depends_on:
       db:
         condition: service_healthy
