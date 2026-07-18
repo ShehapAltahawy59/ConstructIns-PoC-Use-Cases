@@ -1,0 +1,160 @@
+# ConstructX AI — Demo (PostgreSQL + Docker)
+
+A working demo of **two modules** from the Epsilon ConstructX AI catalogue, built
+from the use-case specs and datasets in the sibling folders:
+
+| # | Module | Source spec |
+|---|--------|-------------|
+| 1 | **AI-Assisted Subcontractor Management & Performance Monitoring** | `../AI_Subcontractor_Management/` |
+| 2 | **AI-Powered Material Management & Supplier Tracking** | `../Material_Management/` |
+
+Each module ships with:
+- a **PostgreSQL** table seeded from the real 40-row dataset (exported from the
+  spec's Excel `Company_Input_Data` sheet),
+- an **AI engine** implementing the spec's logic (KPI scoring, risk prediction,
+  demand forecasting, supplier scoring, recommendations),
+- a **REST API** (FastAPI, auto Swagger docs), and
+- a **web dashboard** tab (KPI cards, ranked tables, risk alerts).
+
+> The demo is designed for **multiple modules**: adding a third module = one
+> table (`models.py`), one AI engine (`app/ai/`), one router (`app/routers/`),
+> and one dashboard tab. Nothing else changes.
+
+## Architecture
+
+```
+┌──────────────┐        ┌────────────────────────────┐
+│  PostgreSQL  │◀──────▶│  FastAPI  (api container)  │
+│ (db container│  SQL   │  • /api/subcontractors/... │
+│  port 5432)  │        │  • /api/materials/...      │
+└──────────────┘        │  • /  dashboard (static)   │
+                        │  • /docs  Swagger UI       │
+                        └────────────────────────────┘
+                                     ▲ http :8000
+                                     │
+                                 your browser
+```
+
+Two containers, one command.
+
+## Run it
+
+Requires Docker Desktop.
+
+```bash
+cd constructx-demo
+docker compose up -d --build
+```
+
+Then open:
+
+- **Dashboard** → http://localhost:8000/
+- **API docs (Swagger)** → http://localhost:8000/docs
+- **PostgreSQL** → `localhost:5432` (user/pass/db = `constructx`)
+
+The datasets seed automatically on first startup (40 subcontractors + 40
+materials). Stop with `docker compose down` (add `-v` to also drop the DB volume).
+
+## Module 1 — Subcontractor Management
+
+**Business rules (weighted score):** Quality 35% · Schedule 25% · Cost 20% ·
+Safety 10% · Client 10% (from the use-case document, §9).
+
+Endpoints (`/api/subcontractors`):
+
+| Endpoint | Output |
+|----------|--------|
+| `GET /summary` | Executive KPI summary |
+| `GET /evaluate` | Full AI evaluation + ranking (dashboard feed) |
+| `GET /rankings` | Vendor rankings with scores, risks, recommendation |
+| `GET /alerts` | Delay-risk and contract-breach alerts |
+| `GET /recommended` | Preferred vendors for future projects |
+| `GET /raw` | Raw ingested input data |
+| `GET /{vendor_id}` | Single-vendor performance scorecard |
+
+AI logic (`app/ai/subcontractor.py`): KPI calculation, weighted performance
+score, delay-risk classifier, contract-breach classifier, ranking, vendor
+recommendation.
+
+## Module 2 — Material Management & Supplier Tracking
+
+Endpoints (`/api/materials`):
+
+| Endpoint | Output |
+|----------|--------|
+| `GET /summary` | Inventory KPI summary |
+| `GET /evaluate` | Per-material AI evaluation (dashboard feed) |
+| `GET /suppliers` | Supplier scoring & ranking |
+| `GET /alerts` | Low-stock + supplier delay alerts |
+| `GET /purchase-recommendations` | Reorder recommendations |
+| `GET /raw` | Raw inventory/procurement data |
+| `GET /{material_id}` | Single-material detail |
+
+AI logic (`app/ai/material.py`): demand forecasting, inventory-health status
+(vs. reorder point), supplier performance scoring, delivery-delay prediction,
+best-supplier recommendation, reorder quantities.
+
+## Project layout
+
+```
+constructx-demo/
+├── docker-compose.yml          # db + api services
+├── db/init.sql                 # schema (also created by SQLAlchemy)
+└── backend/
+    ├── Dockerfile
+    ├── requirements.txt
+    ├── data/                   # seed CSVs (from the spec Excel files)
+    │   ├── subcontractors.csv
+    │   └── materials.csv
+    └── app/
+        ├── main.py             # FastAPI app, startup seeding, static serve
+        ├── database.py         # engine + session
+        ├── models.py           # ORM models (one per module)
+        ├── seed.py             # CSV → PostgreSQL loader (idempotent)
+        ├── ai/                 # scoring/decision engines (one per module)
+        │   ├── subcontractor.py
+        │   └── material.py
+        ├── ml/                 # trained RandomForest models
+        │   ├── datagen.py      # synthetic training-data generator
+        │   └── registry.py     # train / evaluate / persist / predict
+        ├── routers/            # REST routers (one per module)
+        │   ├── subcontractor.py
+        │   └── material.py
+        └── static/             # dashboard (index.html, styles.css, app.js)
+```
+
+## Machine Learning
+
+The predictive parts are **real trained scikit-learn models** (not rules). Four
+RandomForest models are trained at startup on large synthetic datasets (~2,000
+rows each) generated by a hidden noisy data-generating process, so the models
+learn a genuine pattern rather than memorise a formula:
+
+| Model | Type | Held-out performance | Module |
+|-------|------|----------------------|--------|
+| Subcontractor delay risk | `RandomForestClassifier` | ~76% accuracy | 1 |
+| Contract-breach risk | `RandomForestClassifier` | ~90% accuracy | 1 |
+| Material demand forecast | `RandomForestRegressor` | R² ≈ 0.91 | 2 |
+| Supplier delivery-delay risk | `RandomForestClassifier` | ~79% accuracy | 2 |
+
+Pipeline (`app/ml/`):
+- `datagen.py` — generates the realistic training data (fixed seed).
+- `registry.py` — trains each model with a **train/test split**, evaluates it
+  (accuracy + macro-F1 for classifiers, R² + MAE for the regressor), then refits
+  on the full data for inference. Models are cached in memory (and to
+  `/code/models/*.joblib`).
+
+Metrics + feature importances are exposed at:
+- `GET /api/ml/models` (all models)
+- `GET /api/subcontractors/model-info`, `GET /api/materials/model-info`
+
+and shown as chips on the dashboard.
+
+**What stays rule-based (by design):** the **weighted performance score**
+(Quality 35% / Schedule 25% / … — the spec fixes these weights) and the
+**stock-status thresholds** and **supplier scoring** (the spec defines these as
+weighted-scoring formulas, not ML).
+
+> The dataset shipped for the live dashboard is still the real 40-row spec data;
+> the ~2,000-row synthetic set is used only to *train* the models. Swap in your
+> own historical project data to retrain on reality.

@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ConstructX AI — Demo Dashboard</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">◢◤</span>
+      <div>
+        <h1>ConstructX <span>AI</span></h1>
+        <p>Intelligence Across Every Phase of Construction</p>
+      </div>
+    </div>
+    <a class="api-link" href="/docs" target="_blank">API Docs ↗</a>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab active" data-tab="subcontractors">
+      🏗️ Subcontractor Management
+    </button>
+    <button class="tab" data-tab="materials">
+      📦 Material Management &amp; Suppliers
+    </button>
+  </nav>
+
+  <!-- ============ MODULE 1: SUBCONTRACTORS ============ -->
+  <section id="subcontractors" class="module active">
+    <h2>AI-Assisted Subcontractor Management &amp; Performance Monitoring</h2>
+    <p class="subtitle">
+      Weighted scoring (Quality 35% · Schedule 25% · Cost 20% · Safety 10% ·
+      Client 10%), delay &amp; contract-breach risk prediction, and vendor ranking.
+    </p>
+
+    <div class="toolbar">
+      <button class="btn" onclick="openAddForm('subcontractors')">➕ Add Vendor</button>
+      <button class="btn" onclick="document.getElementById('sub-file').click()">⬆ Upload CSV / Excel</button>
+      <input type="file" id="sub-file" accept=".csv,.xlsx" hidden
+             onchange="uploadFile('subcontractors', this)">
+      <a class="btn ghost" href="/api/subcontractors/template.csv">⬇ Template</a>
+      <span class="toolbar-msg" id="sub-msg"></span>
+    </div>
+
+    <div class="cards" id="sub-cards"></div>
+
+    <div class="grid">
+      <div class="panel">
+        <h3>Vendor Rankings &amp; AI Scores</h3>
+        <div class="table-wrap">
+          <table id="sub-table">
+            <thead>
+              <tr>
+                <th>#</th><th>Vendor</th><th>Trade</th><th>Project</th>
+                <th>AI Score</th><th>Delay Risk</th><th>Breach Risk</th>
+                <th>Capacity</th><th>Recommendation</th><th>Edit</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>⚠️ Risk Alerts</h3>
+        <div id="sub-alerts" class="alerts"></div>
+      </div>
+    </div>
+
+    <div class="grid" style="margin-top:1.2rem">
+      <div class="panel">
+        <h3>🏢 Vendor Concentration Risk <span class="hint">(HHI per trade — over-reliance on one vendor)</span></h3>
+        <div class="table-wrap">
+          <table id="conc-table">
+            <thead>
+              <tr><th>Trade</th><th>Vendors</th><th>Top Vendor</th>
+                  <th>Top Share</th><th>HHI</th><th>Risk</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>👷 Workforce Capacity <span class="hint">(overload check)</span></h3>
+        <div class="table-wrap">
+          <table id="cap-table">
+            <thead>
+              <tr><th>Vendor</th><th>Load</th><th>Util.</th><th>Status</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ MODULE 2: MATERIALS ============ -->
+  <section id="materials" class="module">
+    <h2>AI-Powered Material Management &amp; Supplier Tracking</h2>
+    <p class="subtitle">
+      Demand forecasting, inventory-health analysis, supplier scoring, delivery
+      delay prediction and purchase recommendations.
+    </p>
+
+    <div class="toolbar">
+      <button class="btn" onclick="openAddForm('materials')">➕ Add Material</button>
+      <button class="btn" onclick="document.getElementById('mat-file').click()">⬆ Upload CSV / Excel</button>
+      <input type="file" id="mat-file" accept=".csv,.xlsx" hidden
+             onchange="uploadFile('materials', this)">
+      <a class="btn ghost" href="/api/materials/template.csv">⬇ Template</a>
+      <span class="toolbar-msg" id="mat-msg"></span>
+    </div>
+
+    <div class="cards" id="mat-cards"></div>
+
+    <div class="grid">
+      <div class="panel">
+        <h3>Inventory &amp; AI Recommendations</h3>
+        <div class="table-wrap">
+          <table id="mat-table">
+            <thead>
+              <tr>
+                <th>Material</th><th>Category</th><th>Stock</th>
+                <th>Forecast</th><th>Status</th><th>Action</th>
+                <th>Reorder Qty</th><th>Best Supplier</th><th>Delay Risk</th><th>Edit</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>🏆 Supplier Ranking</h3>
+        <div class="table-wrap">
+          <table id="sup-table">
+            <thead>
+              <tr><th>#</th><th>Supplier</th><th>Score</th>
+                  <th>Reliability</th><th>Lead</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <h3 style="margin-top:1.2rem">⚠️ Alerts</h3>
+        <div id="mat-alerts" class="alerts"></div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    ConstructX AI demo · PostgreSQL + FastAPI + Docker ·
+    <span id="status">connecting…</span>
+  </footer>
+
+  <div id="modal-overlay" class="modal-overlay" onclick="closeModal(event)">
+    <div class="modal" onclick="event.stopPropagation()">
+      <h3 id="modal-title">Add record</h3>
+      <form id="modal-form" class="modal-form"
+            onsubmit="submitAddForm(); return false;"></form>
+      <div class="modal-actions">
+        <button class="btn ghost" type="button" onclick="closeModal()">Cancel</button>
+        <button class="btn" type="button" onclick="submitAddForm()">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

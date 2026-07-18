@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import openpyxl; print\\('openpyxl OK'\\)\")",
+      "Bash(python -c ' *)",
+      "Bash(mkdir -p constructx-demo/db constructx-demo/backend/app/ai constructx-demo/backend/app/routers constructx-demo/backend/app/static constructx-demo/backend/data)",
+      "Bash(docker --version)",
+      "Bash(docker compose *)",
+      "Bash(docker info *)",
+      "Bash(curl -s http://localhost:8000/health)",
+      "Bash(curl -s http://localhost:8000/api/subcontractors/summary)",
+      "Bash(curl -s http://localhost:8000/api/materials/summary)",
+      "Bash(curl -s http://localhost:8000/api/subcontractors/rankings)",
+      "Bash(python -c \"import sys,json;print\\(json.load\\(sys.stdin\\)[0]\\)\")",
+      "Bash(curl -s http://localhost:8000/api/subcontractors/V002)",
+      "Bash(python -m json.tool)",
+      "Bash(curl -s http://localhost:8000/)",
+      "Bash(curl -s http://localhost:8000/api/materials/evaluate)",
+      "Bash(python -c \"import playwright\")",
+      "Read(//c/Program Files/Google/Chrome/Application/**)",
+      "Bash('/c/Program Files/Google/Chrome/Application/chrome.exe' --headless --disable-gpu --hide-scrollbars --window-size=1400,1600 --virtual-time-budget=6000 --screenshot=C:/Users/sheha/AppData/Local/Temp/claude/c--Users-sheha-Downloads-New-folder--4-/e9804ace-f7ee-4f31-b24b-a0a81265c5fe/scratchpad/dashboard.png http://localhost:8000/)",
+      "Bash(cat)",
+      "Bash('/c/Program Files/Google/Chrome/Application/chrome.exe' --headless --disable-gpu --hide-scrollbars --window-size=1400,1400 --virtual-time-budget=6000 --screenshot=C:/Users/sheha/AppData/Local/Temp/claude/c--Users-sheha-Downloads-New-folder--4-/e9804ace-f7ee-4f31-b24b-a0a81265c5fe/scratchpad/materials.png 'http://localhost:8000/#materials')",
+      "Bash('/c/Program Files/Google/Chrome/Application/chrome.exe' --headless --disable-gpu --hide-scrollbars --window-size=1400,1500 --virtual-time-budget=6000 --screenshot=C:/Users/sheha/AppData/Local/Temp/claude/c--Users-sheha-Downloads-New-folder--4-/e9804ace-f7ee-4f31-b24b-a0a81265c5fe/scratchpad/materials.png http://localhost:8000/)",
+      "Bash(python -c \"import sklearn, numpy, joblib; print\\('sklearn', sklearn.__version__, '| numpy', numpy.__version__\\)\")"
+    ]
+  }
+}
