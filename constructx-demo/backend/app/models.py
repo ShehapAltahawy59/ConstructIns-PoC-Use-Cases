@@ -27,6 +27,19 @@ class Subcontractor(Base):
     capacity_projects = Column(Integer)
 
 
+class ProgressUpdate(Base):
+    """A weekly progress report for a subcontractor — the live-tracking time series."""
+    __tablename__ = "progress_updates"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    vendor_id = Column(Text, index=True)   # references subcontractors.vendor_id
+    week_date = Column(Date)
+    progress_pct = Column(Numeric(6, 2))
+    delay_days = Column(Integer)
+    open_issues = Column(Integer)
+    note = Column(Text)
+
+
 class Material(Base):
     __tablename__ = "materials"
 

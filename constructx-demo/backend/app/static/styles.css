@@ -99,6 +99,19 @@ td.actions { white-space: nowrap; }
   gap: .25rem;
 }
 .modal-form label.req::after { content: " *"; color: var(--red); }
+.form-heading {
+  grid-column: 1 / -1; font-weight: 700; color: var(--blue-dark);
+  font-size: .8rem; margin-top: .5rem; padding-top: .6rem;
+  border-top: 1px solid var(--line);
+}
+.modal-form label.raw-field input {
+  background: #fffdf5; border-color: #e7ddb5;
+}
+.modal-form label.computed-field { color: var(--blue-dark); font-weight: 600; }
+.modal-form label.computed-field input {
+  background: #eaf3ff; border-color: #b9d5f5; font-weight: 700;
+  color: var(--blue-dark);
+}
 .modal-form input {
   padding: .5rem .6rem; border: 1px solid var(--line); border-radius: 7px;
   font-size: .9rem; color: var(--ink);
@@ -107,6 +120,12 @@ td.actions { white-space: nowrap; }
 .modal-actions {
   display: flex; justify-content: flex-end; gap: .6rem; margin-top: 1.3rem;
 }
+
+.track-summary {
+  background: #f4f6fb; border-radius: 10px; padding: .8rem 1rem;
+  margin-bottom: 1rem;
+}
+.trendchart { background: #fff; border: 1px solid var(--line); border-radius: 10px; }
 
 .cards {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));

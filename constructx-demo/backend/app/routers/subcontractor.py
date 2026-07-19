@@ -3,12 +3,15 @@ from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, Upload
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 
+import datetime as dt
+
 from .. import ingest
-from ..ai import subcontractor as ai
 from ..ai import portfolio
+from ..ai import subcontractor as ai
+from ..ai import tracking
 from ..database import get_db
 from ..ml import registry
-from ..models import Subcontractor
+from ..models import ProgressUpdate, Subcontractor
 
 router = APIRouter(prefix="/api/subcontractors", tags=["Subcontractor Management"])
 
@@ -211,6 +214,62 @@ def scorecard(vendor_id: str, db: Session = Depends(get_db)):
     result["engineer_rating"] = float(row.engineer_rating or 0)
     result["client_rating"] = float(row.client_rating or 0)
     return result
+
+
+@router.get("/{vendor_id}/progress")
+def get_progress(vendor_id: str, db: Session = Depends(get_db)):
+    """Weekly progress history + trend-based finish/delay forecast (live tracking)."""
+    v = db.get(Subcontractor, vendor_id)
+    if v is None:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+    ups = (db.query(ProgressUpdate)
+           .filter(ProgressUpdate.vendor_id == vendor_id)
+           .order_by(ProgressUpdate.week_date).all())
+    history = [{
+        "week_date": u.week_date.isoformat() if u.week_date else None,
+        "progress_pct": float(u.progress_pct or 0),
+        "delay_days": u.delay_days,
+        "open_issues": u.open_issues,
+        "note": u.note,
+    } for u in ups]
+    fc = tracking.forecast(
+        [{"week_date": u.week_date, "progress_pct": u.progress_pct} for u in ups],
+        planned_progress=float(v.planned_progress or 0),
+    )
+    return {"vendor": v.vendor_name, "trade": v.trade, "project": v.project,
+            "planned_progress": float(v.planned_progress or 0),
+            "history": history, "forecast": fc}
+
+
+@router.post("/{vendor_id}/progress")
+def add_progress(vendor_id: str, payload: dict = Body(...),
+                 db: Session = Depends(get_db)):
+    """Log this week's progress; also updates the vendor's current state so the
+    AI models immediately reflect the latest reality."""
+    v = db.get(Subcontractor, vendor_id)
+    if v is None:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+    wk = payload.get("week_date")
+    week_date = dt.date.fromisoformat(wk) if wk else dt.date.today()
+    pct = payload.get("progress_pct")
+    delay = payload.get("delay_days")
+    issues = payload.get("open_issues")
+    db.add(ProgressUpdate(
+        vendor_id=vendor_id, week_date=week_date,
+        progress_pct=pct if pct not in (None, "") else None,
+        delay_days=int(delay) if delay not in (None, "") else None,
+        open_issues=int(issues) if issues not in (None, "") else None,
+        note=payload.get("note"),
+    ))
+    # Roll the latest values onto the vendor so every AI output updates.
+    if pct not in (None, ""):
+        v.actual_progress = pct
+    if delay not in (None, ""):
+        v.delay_days = int(delay)
+    if issues not in (None, ""):
+        v.open_issues = int(issues)
+    db.commit()
+    return {"ok": True}
 
 
 @router.delete("/{vendor_id}")

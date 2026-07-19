@@ -4,7 +4,7 @@ import datetime as dt
 import os
 
 from .database import SessionLocal
-from .models import Material, Subcontractor
+from .models import Material, ProgressUpdate, Subcontractor
 
 DATA_DIR = os.getenv("DATA_DIR", "/code/data")
 
@@ -88,8 +88,36 @@ def seed_materials(db) -> int:
         return count
 
 
+def seed_progress(db) -> int:
+    """Create ~5 weeks of progress history per vendor so trends show at once."""
+    vendors = db.query(Subcontractor).all()
+    today = dt.date.today()
+    weeks = 5
+    count = 0
+    for v in vendors:
+        actual = float(v.actual_progress or 0)
+        delay = int(v.delay_days or 0)
+        issues = int(v.open_issues or 0)
+        # Assume a steady climb ending at the current actual progress.
+        start = max(0.0, actual - 4.0 * (weeks - 1))  # ~4%/week ramp
+        for i in range(weeks):
+            frac = i / (weeks - 1)
+            pct = round(start + (actual - start) * frac, 1)
+            db.add(ProgressUpdate(
+                vendor_id=v.vendor_id,
+                week_date=today - dt.timedelta(days=(weeks - 1 - i) * 7),
+                progress_pct=pct,
+                delay_days=int(delay * frac),
+                open_issues=issues,
+                note="baseline",
+            ))
+            count += 1
+    db.commit()
+    return count
+
+
 def run_seed() -> None:
-    """Seed both tables if they are empty (idempotent)."""
+    """Seed tables if they are empty (idempotent)."""
     db = SessionLocal()
     try:
         if db.query(Subcontractor).count() == 0:
@@ -98,5 +126,8 @@ def run_seed() -> None:
         if db.query(Material).count() == 0:
             n = seed_materials(db)
             print(f"[seed] inserted {n} materials")
+        if db.query(ProgressUpdate).count() == 0:
+            n = seed_progress(db)
+            print(f"[seed] inserted {n} progress updates")
     finally:
         db.close()

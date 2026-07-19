@@ -29,6 +29,18 @@ CREATE TABLE IF NOT EXISTS subcontractors (
     capacity_projects INTEGER          -- max concurrent projects the vendor can handle
 );
 
+-- Weekly progress reports per subcontractor (live-tracking time series).
+CREATE TABLE IF NOT EXISTS progress_updates (
+    id            SERIAL PRIMARY KEY,
+    vendor_id     TEXT,
+    week_date     DATE,
+    progress_pct  NUMERIC(6, 2),
+    delay_days    INTEGER,
+    open_issues   INTEGER,
+    note          TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_progress_vendor ON progress_updates (vendor_id);
+
 -- ---------------------------------------------------------------------------
 -- Module 2: Material Management & Supplier Tracking
 -- ---------------------------------------------------------------------------

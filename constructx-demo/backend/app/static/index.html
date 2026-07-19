@@ -55,7 +55,7 @@
               <tr>
                 <th>#</th><th>Vendor</th><th>Trade</th><th>Project</th>
                 <th>AI Score</th><th>Delay Risk</th><th>Breach Risk</th>
-                <th>Capacity</th><th>Recommendation</th><th>Edit</th>
+                <th>Capacity</th><th>Recommendation</th><th>Track / Edit</th>
               </tr>
             </thead>
             <tbody></tbody>
@@ -154,6 +154,15 @@
     ConstructX AI demo · PostgreSQL + FastAPI + Docker ·
     <span id="status">connecting…</span>
   </footer>
+
+  <div id="track-overlay" class="modal-overlay" onclick="closeTrack(event)">
+    <div class="modal" onclick="event.stopPropagation()">
+      <div id="track-body">Loading…</div>
+      <div class="modal-actions">
+        <button class="btn ghost" type="button" onclick="closeTrack()">Close</button>
+      </div>
+    </div>
+  </div>
 
   <div id="modal-overlay" class="modal-overlay" onclick="closeModal(event)">
     <div class="modal" onclick="event.stopPropagation()">

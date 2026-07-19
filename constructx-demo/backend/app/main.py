@@ -16,7 +16,7 @@ from sqlalchemy.exc import OperationalError
 
 from .database import Base, engine
 from .ml import registry
-from .routers import material, subcontractor
+from .routers import material, scoring, subcontractor
 from .seed import run_seed
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
@@ -56,6 +56,7 @@ app = FastAPI(
 
 app.include_router(subcontractor.router)
 app.include_router(material.router)
+app.include_router(scoring.router)
 
 
 @app.middleware("http")
