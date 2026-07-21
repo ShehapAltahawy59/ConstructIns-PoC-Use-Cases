@@ -1,133 +1,69 @@
-"""Load the CSV datasets into PostgreSQL on first startup."""
-import csv
-import datetime as dt
+"""Seed the database on first startup.
+
+Module 1: projects, companies, subcontracts, SOV, progress claims.
+Module 2: suppliers, materials, requirements (BOQ), purchase orders, deliveries.
+"""
 import os
 
+from . import seed_data
 from .database import SessionLocal
-from .models import Material, ProgressUpdate, Subcontractor
-
-DATA_DIR = os.getenv("DATA_DIR", "/code/data")
-
-
-def _int(v):
-    v = (v or "").strip()
-    return int(float(v)) if v else None
+from .models import (
+    Delivery, Invoice, Material, MaterialRequirement, POLine, ProgressClaim,
+    Project, PurchaseOrder, SovLine, Subcontract, Subcontractor, Supplier,
+)
 
 
-def _num(v):
-    v = (v or "").strip()
-    return float(v) if v else None
-
-
-def _date(v):
-    v = (v or "").strip()
-    if not v:
-        return None
-    return dt.date.fromisoformat(v)
-
-
-def seed_subcontractors(db) -> int:
-    path = os.path.join(DATA_DIR, "subcontractors.csv")
-    with open(path, encoding="utf-8") as f:
-        reader = csv.reader(f)
-        next(reader)  # header
-        count = 0
-        for r in reader:
-            if not r or not r[0].strip():
-                continue
-            db.add(Subcontractor(
-                vendor_id=r[0].strip(),
-                vendor_name=r[1].strip(),
-                trade=r[2].strip(),
-                project=r[3].strip(),
-                contract_value=_num(r[4]),
-                planned_progress=_num(r[5]),
-                actual_progress=_num(r[6]),
-                quality_score=_num(r[7]),
-                safety_score=_num(r[8]),
-                inspection_pass=_num(r[9]),
-                delay_days=_int(r[10]),
-                open_issues=_int(r[11]),
-                invoice_amount=_num(r[12]),
-                paid_amount=_num(r[13]),
-                engineer_rating=_num(r[14]),
-                client_rating=_num(r[15]),
-                active_projects=_int(r[16]),
-                capacity_projects=_int(r[17]),
-            ))
-            count += 1
-        db.commit()
-        return count
-
-
-def seed_materials(db) -> int:
-    path = os.path.join(DATA_DIR, "materials.csv")
-    with open(path, encoding="utf-8") as f:
-        reader = csv.reader(f)
-        next(reader)  # header
-        count = 0
-        for r in reader:
-            if not r or not r[0].strip():
-                continue
-            db.add(Material(
-                material_id=r[0].strip(),
-                material_name=r[1].strip(),
-                category=r[2].strip(),
-                current_stock=_num(r[3]),
-                minimum_stock=_num(r[4]),
-                required_qty=_num(r[5]),
-                supplier=r[6].strip(),
-                lead_time_days=_int(r[7]),
-                unit_price=_num(r[8]),
-                delivery_reliability=_num(r[9]),
-                project=r[10].strip(),
-                expected_delivery=_date(r[11]),
-            ))
-            count += 1
-        db.commit()
-        return count
-
-
-def seed_progress(db) -> int:
-    """Create ~5 weeks of progress history per vendor so trends show at once."""
-    vendors = db.query(Subcontractor).all()
-    today = dt.date.today()
-    weeks = 5
-    count = 0
-    for v in vendors:
-        actual = float(v.actual_progress or 0)
-        delay = int(v.delay_days or 0)
-        issues = int(v.open_issues or 0)
-        # Assume a steady climb ending at the current actual progress.
-        start = max(0.0, actual - 4.0 * (weeks - 1))  # ~4%/week ramp
-        for i in range(weeks):
-            frac = i / (weeks - 1)
-            pct = round(start + (actual - start) * frac, 1)
-            db.add(ProgressUpdate(
-                vendor_id=v.vendor_id,
-                week_date=today - dt.timedelta(days=(weeks - 1 - i) * 7),
-                progress_pct=pct,
-                delay_days=int(delay * frac),
-                open_issues=issues,
-                note="baseline",
-            ))
-            count += 1
+def seed_subcontractor_model(db) -> None:
+    projects, companies, subs, sov, claims = seed_data.generate()
+    for p in projects:
+        db.add(Project(**p))
+    for c in companies:
+        db.add(Subcontractor(**c))
+    for s in subs:
+        db.add(Subcontract(**s))
+    for l in sov:
+        db.add(SovLine(**l))
+    for cl in claims:
+        db.add(ProgressClaim(**cl))
     db.commit()
-    return count
+    print(f"[seed] {len(projects)} projects, {len(companies)} companies, "
+          f"{len(subs)} subcontracts, {len(sov)} SOV lines, {len(claims)} claims")
+
+
+def seed_procurement(db) -> None:
+    suppliers, materials, reqs, pos, lines, deliveries, invoices = \
+        seed_data.generate_procurement()
+    for s in suppliers:
+        db.add(Supplier(**s))
+    for m in materials:
+        db.add(Material(**m))
+    for r in reqs:
+        db.add(MaterialRequirement(**r))
+    for p in pos:
+        db.add(PurchaseOrder(**p))
+    for l in lines:
+        db.add(POLine(**l))
+    for d in deliveries:
+        db.add(Delivery(**d))
+    for iv in invoices:
+        db.add(Invoice(**iv))
+    db.commit()
+    print(f"[seed] {len(suppliers)} suppliers, {len(materials)} materials, "
+          f"{len(reqs)} requirements, {len(pos)} POs, {len(deliveries)} deliveries, "
+          f"{len(invoices)} invoices")
 
 
 def run_seed() -> None:
-    """Seed tables if they are empty (idempotent)."""
+    """The system starts EMPTY — companies import their own workbooks.
+    Set SEED_DEMO_DATA=true to load the sample dataset instead."""
+    if os.getenv("SEED_DEMO_DATA", "false").lower() not in ("1", "true", "yes"):
+        print("[seed] starting empty (import a workbook to load data)")
+        return
     db = SessionLocal()
     try:
         if db.query(Subcontractor).count() == 0:
-            n = seed_subcontractors(db)
-            print(f"[seed] inserted {n} subcontractors")
-        if db.query(Material).count() == 0:
-            n = seed_materials(db)
-            print(f"[seed] inserted {n} materials")
-        if db.query(ProgressUpdate).count() == 0:
-            n = seed_progress(db)
-            print(f"[seed] inserted {n} progress updates")
+            seed_subcontractor_model(db)
+        if db.query(Supplier).count() == 0:
+            seed_procurement(db)
     finally:
         db.close()

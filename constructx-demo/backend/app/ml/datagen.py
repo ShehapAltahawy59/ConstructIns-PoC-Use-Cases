@@ -14,11 +14,12 @@ from __future__ import annotations
 import numpy as np
 
 # ---- canonical feature orders -------------------------------------------------
+# Note: Engineer/Client ratings removed (subjective, rarely collected).
+# Cost signal is now earned-value overrun (paid vs work actually completed).
 SUB_FEATURES = [
     "planned_progress", "actual_progress", "schedule_slip", "quality_score",
     "safety_score", "inspection_pass", "delay_days", "open_issues",
     "contract_value", "invoice_amount", "paid_amount", "overrun_pct",
-    "engineer_rating", "client_rating",
 ]
 
 # Recommendation also needs the vendor's current workload.
@@ -90,9 +91,9 @@ def generate_subcontractors(n: int = 2500, seed: int = 42) -> dict:
     paid = np.clip(
         invoice * (1 + (0.5 - reliability) * 0.35 + rng.normal(0, 0.05, n)),
         0, None)
-    overrun_pct = np.where(invoice > 0, (paid - invoice) / invoice * 100, 0)
-    engineer = _clip(2.4 + 2.6 * reliability + rng.normal(0, 0.3, n), 1, 5)
-    client = _clip(2.4 + 2.6 * reliability + rng.normal(0, 0.3, n), 1, 5)
+    # Earned-value cost overrun: paid vs value of work actually completed.
+    earned = actual / 100.0 * contract_value
+    overrun_pct = np.where(earned > 0, (paid - earned) / earned * 100, 0)
 
     # Current workload (for capacity-aware recommendation).
     capacity = np.clip(np.round(contract_value / 200_000) + 1, 2, 6)
@@ -104,11 +105,10 @@ def generate_subcontractors(n: int = 2500, seed: int = 42) -> dict:
     schedule_kpi = _clip(actual / planned * 100 - delay_days * 2)
     cost_kpi = _clip(100 - np.maximum(0, overrun_pct))
     safety_kpi = _clip(safety)
-    client_kpi = _clip(client * 20)
 
     # --- hidden PERFORMANCE SCORE (non-linear: safety gate + interaction) ---
-    perf = (0.30 * quality_kpi + 0.22 * schedule_kpi + 0.18 * cost_kpi
-            + 0.15 * safety_kpi + 0.15 * client_kpi)
+    perf = (0.35 * quality_kpi + 0.30 * schedule_kpi + 0.20 * cost_kpi
+            + 0.15 * safety_kpi)
     perf -= np.where(safety_kpi < 60, (60 - safety_kpi) * 0.7, 0)      # gate
     perf += np.where((quality_kpi > 85) & (schedule_kpi > 85), 4, 0)   # synergy
     perf -= open_issues * 0.4
@@ -152,7 +152,6 @@ def generate_subcontractors(n: int = 2500, seed: int = 42) -> dict:
         "delay_days": delay_days, "open_issues": open_issues,
         "contract_value": contract_value, "invoice_amount": invoice,
         "paid_amount": paid, "overrun_pct": overrun_pct,
-        "engineer_rating": engineer, "client_rating": client,
         "utilization": utilization,
     }
     return {

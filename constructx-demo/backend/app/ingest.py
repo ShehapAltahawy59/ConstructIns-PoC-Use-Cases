@@ -40,6 +40,28 @@ SUB_SPEC = [
     ("capacity_projects", "Capacity Projects", "int"),
 ]
 
+# One spreadsheet row = one assignment (subcontractor on a project). The upload
+# endpoint upserts the company, the project, and the assignment from each row.
+ASSIGN_SPEC = [
+    ("assignment_id", "Assignment ID", "str"),
+    ("vendor_id", "Company ID", "str"),
+    ("company_name", "Company Name", "str"),
+    ("trade", "Trade", "str"),
+    ("capacity_projects", "Capacity Projects", "int"),
+    ("project_id", "Project ID", "str"),
+    ("project_name", "Project Name", "str"),
+    ("contract_value", "Contract Value", "num"),
+    ("planned_progress", "Planned Progress %", "num"),
+    ("actual_progress", "Actual Progress %", "num"),
+    ("quality_score", "Quality Score", "num"),
+    ("safety_score", "Safety Score", "num"),
+    ("inspection_pass", "Inspection Pass %", "num"),
+    ("delay_days", "Delay Days", "int"),
+    ("open_issues", "Open Issues", "int"),
+    ("invoice_amount", "Invoice Amount", "num"),
+    ("paid_amount", "Paid Amount", "num"),
+]
+
 MAT_SPEC = [
     ("material_id", "Material ID", "str"),
     ("material_name", "Material Name", "str"),

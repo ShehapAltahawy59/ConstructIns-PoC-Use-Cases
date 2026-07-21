@@ -1,283 +1,210 @@
-"""Module 1 API: AI-Assisted Subcontractor Management & Performance Monitoring."""
-from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, UploadFile
-from fastapi.responses import PlainTextResponse
+"""Module 1 API — companies ranked by AI performance across their subcontracts.
+
+Each subcontract is enriched with Earned-Value metrics (planned % from the
+baseline schedule, actual % from the SOV-weighted progress) before scoring, then
+rolled up to the company level.
+"""
+from collections import defaultdict
+
+from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
-import datetime as dt
-
-from .. import ingest
-from ..ai import portfolio
+from .. import cache, import_workbook
+from ..ai import evm, portfolio
 from ..ai import subcontractor as ai
-from ..ai import tracking
 from ..database import get_db
 from ..ml import registry
-from ..models import ProgressUpdate, Subcontractor
+from ..models import (
+    ProgressClaim, Project, SovLine, Subcontract, Subcontractor,
+)
 
 router = APIRouter(prefix="/api/subcontractors", tags=["Subcontractor Management"])
 
 
-def _all(db: Session):
+def _companies(db):
     return db.query(Subcontractor).all()
 
 
+def _enriched(db):
+    """Subcontracts enriched with EVM-derived plan/actual/cost + company/project."""
+    subs = db.query(Subcontract).all()
+    companies = {c.vendor_id: c for c in _companies(db)}
+    projects = {p.project_id: p for p in db.query(Project).all()}
+    sov_by = defaultdict(list)
+    for l in db.query(SovLine).all():
+        sov_by[l.subcontract_id].append(l)
+    counts = defaultdict(int)
+    for s in subs:
+        counts[s.vendor_id] += 1
+
+    for s in subs:
+        m = evm.metrics(s, sov_by.get(s.subcontract_id, []))
+        s.contract_value = m["contract_value"]
+        s.planned_progress = m["planned_progress"]
+        s.actual_progress = m["actual_progress"]
+        s.invoice_amount = m["billed_to_date"]
+        s.paid_amount = m["net_paid"]
+        s.evm = m
+        c = companies.get(s.vendor_id)
+        p = projects.get(s.project_id)
+        s.company_name = c.company_name if c else ""
+        s.trade = c.trade if c else ""
+        s.project_name = p.name if p else s.project_id
+        cap = int(c.capacity_projects) if c and c.capacity_projects else 0
+        s.utilization = round(counts[s.vendor_id] / cap * 100) if cap else 0
+    return subs
+
+
+def _assign_evals(db):
+    return cache.cached("sub_eval", "subcontractors",
+                        lambda: ai.evaluate_all_assignments(_enriched(db)))
+
+
+def _rollup(db):
+    return cache.cached("sub_rollup", "subcontractors",
+                        lambda: ai.aggregate_companies(_assign_evals(db), _companies(db)))
+
+
+@router.get("/companies")
+def companies(db: Session = Depends(get_db)):
+    return _rollup(db)
+
+
 @router.get("/raw")
-def raw_data(db: Session = Depends(get_db)):
-    """Raw subcontractor input data (as ingested from company systems)."""
-    rows = _all(db)
-    return [
-        {
-            "vendor_id": r.vendor_id,
-            "vendor_name": r.vendor_name,
-            "trade": r.trade,
-            "project": r.project,
-            "contract_value": float(r.contract_value or 0),
-            "planned_progress": float(r.planned_progress or 0),
-            "actual_progress": float(r.actual_progress or 0),
-            "quality_score": float(r.quality_score or 0),
-            "safety_score": float(r.safety_score or 0),
-            "inspection_pass": float(r.inspection_pass or 0),
-            "delay_days": r.delay_days,
-            "open_issues": r.open_issues,
-            "invoice_amount": float(r.invoice_amount or 0),
-            "paid_amount": float(r.paid_amount or 0),
-            "engineer_rating": float(r.engineer_rating or 0),
-            "client_rating": float(r.client_rating or 0),
-            "active_projects": r.active_projects,
-            "capacity_projects": r.capacity_projects,
-        }
-        for r in rows
-    ]
+def raw_companies(db: Session = Depends(get_db)):
+    return [{"vendor_id": c.vendor_id, "company_name": c.company_name,
+             "trade": c.trade, "capacity_projects": c.capacity_projects}
+            for c in _companies(db)]
 
 
-@router.get("/evaluate")
-def evaluate(db: Session = Depends(get_db)):
-    """AI evaluation + ranking for every subcontractor (main dashboard feed)."""
-    return ai.evaluate_all(_all(db))
-
-
-@router.get("/rankings")
-def rankings(db: Session = Depends(get_db)):
-    """Vendor rankings (vendor, score, risks, recommendation)."""
-    results = ai.evaluate_all(_all(db))
-    return [
-        {
-            "rank": r["rank"],
-            "vendor": r["vendor"],
-            "ai_score": r["ai_score"],
-            "delay_risk": r["delay_risk"],
-            "contract_breach_risk": r["contract_breach_risk"],
-            "recommendation": r["recommendation"],
-        }
-        for r in results
-    ]
+@router.get("/{vendor_id}/subcontracts")
+def company_subcontracts(vendor_id: str, db: Session = Depends(get_db)):
+    comp = db.get(Subcontractor, vendor_id)
+    if comp is None:
+        raise HTTPException(status_code=404, detail="Company not found")
+    items = [e for e in _assign_evals(db) if e["vendor_id"] == vendor_id]
+    return {"vendor_id": vendor_id, "company": comp.company_name,
+            "trade": comp.trade, "capacity_projects": comp.capacity_projects,
+            "subcontracts": items}
 
 
 @router.get("/alerts")
 def alerts(db: Session = Depends(get_db)):
-    """Delay-risk and contract-breach alerts for at-risk vendors."""
-    results = ai.evaluate_all(_all(db))
+    rollup = [r for r in _rollup(db) if r["evaluable"]]
     return {
-        "delay_alerts": [
-            {"vendor": r["vendor"], "project": r["project"],
-             "delay_risk": r["delay_risk"]}
-            for r in results if r["delay_risk"] in ("Medium", "High")
-        ],
-        "breach_alerts": [
-            {"vendor": r["vendor"], "project": r["project"],
-             "contract_breach_risk": r["contract_breach_risk"]}
-            for r in results if r["contract_breach_risk"] in ("Medium", "High")
-        ],
-    }
-
-
-@router.get("/recommended")
-def recommended(db: Session = Depends(get_db)):
-    """Vendors recommended as preferred for future projects."""
-    results = ai.evaluate_all(_all(db))
-    return [r for r in results if r["recommendation"] == "Preferred Vendor"]
-
-
-@router.get("/summary")
-def summary(db: Session = Depends(get_db)):
-    """Executive-dashboard KPI summary."""
-    results = ai.evaluate_all(_all(db))
-    total = len(results)
-    if not total:
-        return {"total_vendors": 0}
-    high_delay = sum(1 for r in results if r["delay_risk"] == "High")
-    high_breach = sum(1 for r in results
-                      if r["contract_breach_risk"] == "High")
-    preferred = sum(1 for r in results
-                    if r["recommendation"] == "Preferred Vendor")
-    avg_score = round(sum(r["ai_score"] for r in results) / total, 1)
-    rows = _all(db)
-    conc = portfolio.concentration_summary(rows)
-    cap = portfolio.capacity_summary(rows)
-    return {
-        "total_vendors": total,
-        "avg_ai_score": avg_score,
-        "high_delay_risk": high_delay,
-        "high_breach_risk": high_breach,
-        "preferred_vendors": preferred,
-        "top_vendor": results[0]["vendor"],
-        "top_score": results[0]["ai_score"],
-        "high_concentration_trades": conc["high_concentration_trades"],
-        "overloaded_vendors": cap["overloaded_vendors"],
+        "delay_alerts": [{"vendor": r["company"], "delay_risk": r["delay_risk"]}
+                         for r in rollup if r["delay_risk"] in ("Medium", "High")],
+        "breach_alerts": [{"vendor": r["company"],
+                           "contract_breach_risk": r["contract_breach_risk"]}
+                          for r in rollup
+                          if r["contract_breach_risk"] in ("Medium", "High")],
     }
 
 
 @router.get("/concentration")
 def concentration(db: Session = Depends(get_db)):
-    """Vendor-concentration / monopoly risk per trade (HHI index)."""
-    rows = _all(db)
-    return {
-        "summary": portfolio.concentration_summary(rows),
-        "by_trade": portfolio.concentration_by_trade(rows),
-    }
+    subs = _enriched(db)
+    comp_by = {c.vendor_id: c for c in _companies(db)}
+    return {"summary": portfolio.concentration_summary(subs, comp_by),
+            "by_trade": portfolio.concentration_by_trade(subs, comp_by)}
 
 
 @router.get("/capacity")
 def capacity(db: Session = Depends(get_db)):
-    """Workforce capacity / overload analysis per vendor."""
-    rows = _all(db)
+    rollup = _rollup(db)
+    return {"summary": portfolio.capacity_summary(rollup),
+            "vendors": portfolio.capacity_list(rollup)}
+
+
+@router.get("/summary")
+def summary(db: Session = Depends(get_db)):
+    rollup = _rollup(db)
+    total = len(rollup)
+    if not total:
+        return {"total_vendors": 0, "rated_vendors": 0, "new_vendors": 0,
+                "total_assignments": 0, "avg_ai_score": None, "high_delay_risk": 0,
+                "high_breach_risk": 0, "preferred_vendors": 0, "top_vendor": None,
+                "high_concentration_trades": 0, "overloaded_vendors": 0}
+    rated = [r for r in rollup if r["evaluable"]]
+    subs = _enriched(db)
+    comp_by = {c.vendor_id: c for c in _companies(db)}
+    conc = portfolio.concentration_summary(subs, comp_by)
+    cap = portfolio.capacity_summary(rollup)
     return {
-        "summary": portfolio.capacity_summary(rows),
-        "vendors": portfolio.capacity_analysis(rows),
+        "total_vendors": total,
+        "rated_vendors": len(rated),
+        "new_vendors": total - len(rated),
+        "total_assignments": len(subs),
+        "avg_ai_score": round(sum(r["avg_score"] for r in rated) / len(rated), 1)
+        if rated else None,
+        "high_delay_risk": sum(1 for r in rated if r["delay_risk"] == "High"),
+        "high_breach_risk": sum(1 for r in rated
+                                if r["contract_breach_risk"] == "High"),
+        "preferred_vendors": sum(1 for r in rated
+                                 if r["recommendation"] == "Preferred Vendor"),
+        "top_vendor": rated[0]["company"] if rated else None,
+        "high_concentration_trades": conc["high_concentration_trades"],
+        "overloaded_vendors": cap["overloaded_vendors"],
     }
-
-
-@router.post("/upload")
-async def upload_data(
-    file: UploadFile = File(...),
-    mode: str = Query("append", pattern="^(append|replace)$"),
-    db: Session = Depends(get_db),
-):
-    """Upload live data (CSV/Excel). mode=append updates by ID; replace clears first."""
-    content = await file.read()
-    try:
-        rows = ingest.parse_table(content, file.filename)
-        records, warnings = ingest.rows_to_records(rows, ingest.SUB_SPEC)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    if not records:
-        raise HTTPException(status_code=400,
-                            detail="; ".join(warnings) or "No valid rows found")
-    result = ingest.upsert(db, Subcontractor, ingest.SUB_SPEC, records,
-                           replace=(mode == "replace"))
-    result["warnings"] = warnings[:20]
-    return result
-
-
-@router.post("")
-def add_vendor(payload: dict = Body(...), db: Session = Depends(get_db)):
-    """Add or update a subcontractor. New records need a name; existing ones can
-    be patched with any subset of fields (for live incremental updates)."""
-    rec = ingest.coerce_record(payload, ingest.SUB_SPEC)
-    if not rec.get("vendor_id"):
-        raise HTTPException(status_code=400, detail="Vendor ID is required")
-    exists = db.get(Subcontractor, rec["vendor_id"]) is not None
-    if not exists and not rec.get("vendor_name"):
-        raise HTTPException(status_code=400,
-                            detail="Vendor Name is required for a new vendor")
-    return {"ok": True,
-            **ingest.upsert(db, Subcontractor, ingest.SUB_SPEC, [rec])}
-
-
-@router.get("/template.csv")
-def template():
-    """Download a blank CSV template with the correct columns."""
-    return PlainTextResponse(
-        ingest.template_csv(ingest.SUB_SPEC),
-        headers={"Content-Disposition":
-                 "attachment; filename=subcontractors_template.csv"},
-    )
 
 
 @router.get("/model-info")
 def model_info():
-    """Trained-model metrics for this module (score, risks, recommendation)."""
     return registry.model_info(
         ["sub_score", "sub_delay", "sub_breach", "sub_reco"])
 
 
-@router.get("/{vendor_id}")
-def scorecard(vendor_id: str, db: Session = Depends(get_db)):
-    """Performance scorecard for a single subcontractor."""
-    row = db.get(Subcontractor, vendor_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="Vendor not found")
-    result = ai.evaluate(row)
-    # attach raw context
-    result["contract_value"] = float(row.contract_value or 0)
-    result["delay_days"] = row.delay_days
-    result["open_issues"] = row.open_issues
-    result["engineer_rating"] = float(row.engineer_rating or 0)
-    result["client_rating"] = float(row.client_rating or 0)
-    return result
+@router.post("/import")
+async def import_workbook_data(file: UploadFile = File(...),
+                              db: Session = Depends(get_db)):
+    """Import a filled Subcontractor workbook (.xlsx) — replaces module data."""
+    content = await file.read()
+    try:
+        counts = import_workbook.import_subcontractor(content, db)
+    except Exception as exc:                                  # noqa: BLE001
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"Import failed: {exc}")
+    cache.bump("subcontractors")
+    return {"ok": True, "imported": counts}
 
 
-@router.get("/{vendor_id}/progress")
-def get_progress(vendor_id: str, db: Session = Depends(get_db)):
-    """Weekly progress history + trend-based finish/delay forecast (live tracking)."""
-    v = db.get(Subcontractor, vendor_id)
-    if v is None:
-        raise HTTPException(status_code=404, detail="Vendor not found")
-    ups = (db.query(ProgressUpdate)
-           .filter(ProgressUpdate.vendor_id == vendor_id)
-           .order_by(ProgressUpdate.week_date).all())
-    history = [{
-        "week_date": u.week_date.isoformat() if u.week_date else None,
-        "progress_pct": float(u.progress_pct or 0),
-        "delay_days": u.delay_days,
-        "open_issues": u.open_issues,
-        "note": u.note,
-    } for u in ups]
-    fc = tracking.forecast(
-        [{"week_date": u.week_date, "progress_pct": u.progress_pct} for u in ups],
-        planned_progress=float(v.planned_progress or 0),
-    )
-    return {"vendor": v.vendor_name, "trade": v.trade, "project": v.project,
-            "planned_progress": float(v.planned_progress or 0),
-            "history": history, "forecast": fc}
-
-
-@router.post("/{vendor_id}/progress")
-def add_progress(vendor_id: str, payload: dict = Body(...),
-                 db: Session = Depends(get_db)):
-    """Log this week's progress; also updates the vendor's current state so the
-    AI models immediately reflect the latest reality."""
-    v = db.get(Subcontractor, vendor_id)
-    if v is None:
-        raise HTTPException(status_code=404, detail="Vendor not found")
-    wk = payload.get("week_date")
-    week_date = dt.date.fromisoformat(wk) if wk else dt.date.today()
-    pct = payload.get("progress_pct")
-    delay = payload.get("delay_days")
-    issues = payload.get("open_issues")
-    db.add(ProgressUpdate(
-        vendor_id=vendor_id, week_date=week_date,
-        progress_pct=pct if pct not in (None, "") else None,
-        delay_days=int(delay) if delay not in (None, "") else None,
-        open_issues=int(issues) if issues not in (None, "") else None,
-        note=payload.get("note"),
-    ))
-    # Roll the latest values onto the vendor so every AI output updates.
-    if pct not in (None, ""):
-        v.actual_progress = pct
-    if delay not in (None, ""):
-        v.delay_days = int(delay)
-    if issues not in (None, ""):
-        v.open_issues = int(issues)
+@router.post("")
+def add_company(payload: dict = Body(...), db: Session = Depends(get_db)):
+    vid = (payload.get("vendor_id") or "").strip()
+    if not vid:
+        raise HTTPException(status_code=400, detail="Company ID is required")
+    obj = db.get(Subcontractor, vid)
+    if obj is None:
+        if not payload.get("company_name"):
+            raise HTTPException(status_code=400,
+                                detail="Company Name is required for a new company")
+        obj = Subcontractor(vendor_id=vid)
+        db.add(obj)
+    for k in ("company_name", "trade"):
+        if payload.get(k) is not None:
+            setattr(obj, k, payload[k])
+    if payload.get("capacity_projects") not in (None, ""):
+        obj.capacity_projects = int(float(payload["capacity_projects"]))
     db.commit()
-    return {"ok": True}
+    cache.bump("subcontractors")
+    return {"ok": True, "vendor_id": vid}
 
 
 @router.delete("/{vendor_id}")
-def delete_vendor(vendor_id: str, db: Session = Depends(get_db)):
-    """Remove a subcontractor."""
+def delete_company(vendor_id: str, db: Session = Depends(get_db)):
     obj = db.get(Subcontractor, vendor_id)
     if obj is None:
-        raise HTTPException(status_code=404, detail="Vendor not found")
+        raise HTTPException(status_code=404, detail="Company not found")
+    sc_ids = [s.subcontract_id for s in db.query(Subcontract)
+              .filter(Subcontract.vendor_id == vendor_id).all()]
+    if sc_ids:
+        db.query(ProgressClaim).filter(
+            ProgressClaim.subcontract_id.in_(sc_ids)).delete(synchronize_session=False)
+        db.query(SovLine).filter(
+            SovLine.subcontract_id.in_(sc_ids)).delete(synchronize_session=False)
+        db.query(Subcontract).filter(
+            Subcontract.vendor_id == vendor_id).delete(synchronize_session=False)
     db.delete(obj)
     db.commit()
+    cache.bump("subcontractors")
     return {"deleted": vendor_id}

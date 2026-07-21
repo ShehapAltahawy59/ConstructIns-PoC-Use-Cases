@@ -174,6 +174,62 @@ def _predict_value(key: str, features: dict, names: list[str]) -> float:
     return float(_STATE["models"][key].predict(X)[0])
 
 
+# ---- batch inference (fast path for the dashboard) ----------------------------
+def _matrix(feats: list[dict], names: list[str]) -> np.ndarray:
+    return np.array([[float(f[n]) for n in names] for f in feats], dtype=float)
+
+
+def _labels_batch(key: str, feats: list[dict], names: list[str]) -> list[str]:
+    ensure_trained()
+    if not feats:
+        return []
+    preds = _STATE["models"][key].predict(_matrix(feats, names))
+    lab = _STATE["labels"][key]
+    return [lab[int(p)] for p in preds]
+
+
+def _values_batch(key: str, feats: list[dict], names: list[str]) -> list[float]:
+    ensure_trained()
+    if not feats:
+        return []
+    return [float(v) for v in _STATE["models"][key].predict(_matrix(feats, names))]
+
+
+def predict_sub_score_batch(feats):
+    return [round(v, 1) for v in _values_batch("sub_score", feats, datagen.SUB_FEATURES)]
+
+
+def predict_sub_delay_batch(feats):
+    return _labels_batch("sub_delay", feats, datagen.SUB_FEATURES)
+
+
+def predict_sub_breach_batch(feats):
+    return _labels_batch("sub_breach", feats, datagen.SUB_FEATURES)
+
+
+def predict_sub_reco_batch(feats):
+    return _labels_batch("sub_reco", feats, datagen.SUB_RECO_FEATURES)
+
+
+def predict_material_demand_batch(feats):
+    return [int(round(v)) for v in
+            _values_batch("mat_demand", feats, datagen.MAT_DEMAND_FEATURES)]
+
+
+def predict_material_reorder_batch(feats):
+    return [max(0, int(round(v))) for v in
+            _values_batch("mat_reorder", feats, datagen.MAT_REORDER_FEATURES)]
+
+
+def predict_material_delay_batch(feats):
+    return _labels_batch("mat_delay", feats, datagen.MAT_DELAY_FEATURES)
+
+
+def predict_supplier_score_batch(feats):
+    return [round(v, 1) for v in
+            _values_batch("sup_score", feats, datagen.SUP_FEATURES)]
+
+
 # ---- public inference API -----------------------------------------------------
 def predict_sub_score(features: dict) -> float:
     return round(_predict_value("sub_score", features, datagen.SUB_FEATURES), 1)
